@@ -57,30 +57,18 @@ func FindRecyclable(d *Deps) (*FindResult, error) {
 		return nil, fmt.Errorf("getting current branch: %w", err)
 	}
 
-	// Run fetch and GitHub lookup in parallel
-	var fetchErr error
+	// Fire-and-forget fetch — use stale origin/main for this invocation.
+	// The data is at most a few minutes old; next call will see the update.
+	go func() {
+		if err := d.Git.FetchOriginMain(); err != nil && d.Verbose {
+			d.Logf("warning: background git fetch failed: %v", err)
+		}
+	}()
+
+	// GitHub lookup (cached)
 	var closedBranches []string
 	var ghErr error
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		fetchErr = d.Git.FetchOriginMain()
-	}()
-
-	go func() {
-		defer wg.Done()
-		closedBranches, ghErr = cachedClosedBranches(d)
-	}()
-
-	wg.Wait()
-
-	if fetchErr != nil {
-		d.Logf("warning: git fetch failed: %v", fetchErr)
-		// Continue — merged branch detection still works with stale data
-	}
+	closedBranches, ghErr = cachedClosedBranches(d)
 
 	// Get merged branches (after fetch)
 	merged, err := d.Git.MergedBranches("wt-*")
