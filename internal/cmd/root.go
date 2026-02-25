@@ -23,6 +23,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "JSON output")
 }
 
+func SetVersion(v string) {
+	rootCmd.Version = v
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }

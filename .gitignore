@@ -1,1 +1,4 @@
 wt-cycle
+wt-cycle-linux-*
+wt-cycle-darwin-*
+dist/
