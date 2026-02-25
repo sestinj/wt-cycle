@@ -19,6 +19,19 @@ type Recyclable struct {
 	Path   string
 }
 
+// Skipped represents a candidate that was not recyclable.
+type Skipped struct {
+	Branch string
+	Path   string
+	Reason string // "current", "no-worktree", "missing-dir", "dirty", "check-failed"
+}
+
+// FindResult holds both recyclable and skipped candidates.
+type FindResult struct {
+	Recyclable []Recyclable
+	Skipped    []Skipped
+}
+
 // Deps bundles the dependencies for the cycle logic.
 type Deps struct {
 	Git    git.Client
@@ -37,7 +50,7 @@ type Deps struct {
 // 3. Its worktree directory exists
 // 4. Its worktree is clean (no uncommitted changes)
 // 5. It's not the current branch
-func FindRecyclable(d *Deps) ([]Recyclable, error) {
+func FindRecyclable(d *Deps) (*FindResult, error) {
 	// Get current branch to exclude
 	currentBranch, err := d.Git.CurrentBranch()
 	if err != nil {
@@ -90,7 +103,7 @@ func FindRecyclable(d *Deps) ([]Recyclable, error) {
 	}
 
 	if len(candidateSet) == 0 {
-		return nil, nil
+		return &FindResult{}, nil
 	}
 
 	// Get worktree list and map branches to paths
@@ -101,13 +114,19 @@ func FindRecyclable(d *Deps) ([]Recyclable, error) {
 	worktrees := git.ParseWorktreeList(wtOutput)
 	byBranch := git.WorktreesByBranch(worktrees)
 
-	// Filter candidates
-	var result []Recyclable
+	// Pre-filter candidates that have existing worktree directories (cheap checks first)
+	type candidate struct {
+		branch string
+		path   string
+	}
+	var toCheck []candidate
+	var skipped []Skipped
 	for branch := range candidateSet {
 		if branch == currentBranch {
 			if d.Verbose {
 				d.Logf("skip %s: current branch", branch)
 			}
+			skipped = append(skipped, Skipped{Branch: branch, Reason: "current"})
 			continue
 		}
 
@@ -116,6 +135,7 @@ func FindRecyclable(d *Deps) ([]Recyclable, error) {
 			if d.Verbose {
 				d.Logf("skip %s: no worktree", branch)
 			}
+			skipped = append(skipped, Skipped{Branch: branch, Reason: "no-worktree"})
 			continue
 		}
 
@@ -123,27 +143,54 @@ func FindRecyclable(d *Deps) ([]Recyclable, error) {
 			if d.Verbose {
 				d.Logf("skip %s: directory missing", branch)
 			}
+			skipped = append(skipped, Skipped{Branch: branch, Path: wt.Path, Reason: "missing-dir"})
 			continue
 		}
 
-		clean, err := d.Git.IsClean(wt.Path)
-		if err != nil {
-			if d.Verbose {
-				d.Logf("skip %s: clean check failed: %v", branch, err)
-			}
-			continue
-		}
-		if !clean {
-			if d.Verbose {
-				d.Logf("skip %s: dirty working tree", branch)
-			}
-			continue
-		}
-
-		result = append(result, Recyclable{Branch: branch, Path: wt.Path})
+		toCheck = append(toCheck, candidate{branch: branch, path: wt.Path})
 	}
 
-	return result, nil
+	// Parallel IsClean checks — this is the expensive part (~120ms each)
+	type cleanResult struct {
+		candidate
+		clean bool
+		err   error
+	}
+	results := make([]cleanResult, len(toCheck))
+	var cleanWg sync.WaitGroup
+	sem := make(chan struct{}, 16) // bound concurrency
+	for i, c := range toCheck {
+		cleanWg.Add(1)
+		go func(i int, c candidate) {
+			defer cleanWg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			clean, err := d.Git.IsClean(c.path)
+			results[i] = cleanResult{candidate: c, clean: clean, err: err}
+		}(i, c)
+	}
+	cleanWg.Wait()
+
+	var recyclable []Recyclable
+	for _, r := range results {
+		if r.err != nil {
+			if d.Verbose {
+				d.Logf("skip %s: clean check failed: %v", r.branch, r.err)
+			}
+			skipped = append(skipped, Skipped{Branch: r.branch, Path: r.path, Reason: "check-failed"})
+			continue
+		}
+		if !r.clean {
+			if d.Verbose {
+				d.Logf("skip %s: dirty working tree", r.branch)
+			}
+			skipped = append(skipped, Skipped{Branch: r.branch, Path: r.path, Reason: "dirty"})
+			continue
+		}
+		recyclable = append(recyclable, Recyclable{Branch: r.branch, Path: r.path})
+	}
+
+	return &FindResult{Recyclable: recyclable, Skipped: skipped}, nil
 }
 
 // CollectExistingNums gathers all existing wt-N numbers from refs and worktree directories.

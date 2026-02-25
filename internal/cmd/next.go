@@ -53,7 +53,7 @@ func runNext(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find recyclable worktrees
-	recyclable, err := cycle.FindRecyclable(d)
+	result, err := cycle.FindRecyclable(d)
 	if err != nil {
 		return err
 	}
@@ -66,8 +66,8 @@ func runNext(cmd *cobra.Command, args []string) error {
 	nextNum := cycle.NextNum(existingNums)
 	newBranch := fmt.Sprintf("wt-%d", nextNum)
 
-	if len(recyclable) > 0 {
-		target := recyclable[0]
+	if len(result.Recyclable) > 0 {
+		target := result.Recyclable[0]
 		logf("♻️  Recycling %s", target.Branch)
 
 		// Switch to the recyclable worktree

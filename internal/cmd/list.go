@@ -53,8 +53,6 @@ func runList(cmd *cobra.Command, args []string) error {
 		Logf:    logf,
 	}
 
-	currentBranch, _ := gitClient.CurrentBranch()
-
 	// Get all worktrees
 	wtOutput, err := gitClient.WorktreeListPorcelain()
 	if err != nil {
@@ -62,15 +60,23 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 	allWts := gitpkg.ParseWorktreeList(wtOutput)
 
-	// Get recyclable set
-	recyclable, err := cycle.FindRecyclable(d)
+	// FindRecyclable does all the expensive work (including parallel IsClean)
+	result, err := cycle.FindRecyclable(d)
 	if err != nil {
 		return err
 	}
+
+	// Build lookup maps from FindResult
 	recyclableSet := make(map[string]bool)
-	for _, r := range recyclable {
+	for _, r := range result.Recyclable {
 		recyclableSet[r.Branch] = true
 	}
+	skippedReason := make(map[string]string)
+	for _, s := range result.Skipped {
+		skippedReason[s.Branch] = s.Reason
+	}
+
+	currentBranch, _ := gitClient.CurrentBranch()
 
 	// Build status list for wt-N worktrees
 	var statuses []wtStatus
@@ -84,16 +90,10 @@ func runList(cmd *cobra.Command, args []string) error {
 			Current:    wt.Branch == currentBranch,
 			Recyclable: recyclableSet[wt.Branch],
 		}
-		if s.Current {
-			s.Reason = "current"
+		if reason, ok := skippedReason[wt.Branch]; ok {
+			s.Reason = reason
 		} else if !s.Recyclable {
-			// Check if dirty or not merged
-			clean, _ := gitClient.IsClean(wt.Path)
-			if !clean {
-				s.Reason = "dirty"
-			} else {
-				s.Reason = "active"
-			}
+			s.Reason = "active" // not a candidate (not merged/closed)
 		}
 		statuses = append(statuses, s)
 	}

@@ -73,16 +73,16 @@ branch refs/heads/wt-3
 	}
 
 	// Should get wt-1 and wt-2 (not wt-3: dir doesn't exist, not wt-5: current branch)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 recyclable, got %d: %+v", len(result), result)
+	if len(result.Recyclable) != 2 {
+		t.Fatalf("expected 2 recyclable, got %d: %+v", len(result.Recyclable), result.Recyclable)
 	}
 
 	branches := map[string]bool{}
-	for _, r := range result {
+	for _, r := range result.Recyclable {
 		branches[r.Branch] = true
 	}
 	if !branches["wt-1"] || !branches["wt-2"] {
-		t.Errorf("expected wt-1 and wt-2, got %v", result)
+		t.Errorf("expected wt-1 and wt-2, got %v", result.Recyclable)
 	}
 }
 
@@ -111,8 +111,8 @@ branch refs/heads/wt-2
 		t.Fatal(err)
 	}
 
-	if len(result) != 1 || result[0].Branch != "wt-1" {
-		t.Fatalf("expected only wt-1, got %+v", result)
+	if len(result.Recyclable) != 1 || result.Recyclable[0].Branch != "wt-1" {
+		t.Fatalf("expected only wt-1, got %+v", result.Recyclable)
 	}
 }
 
@@ -136,8 +136,8 @@ branch refs/heads/wt-1
 		t.Fatal(err)
 	}
 
-	if len(result) != 0 {
-		t.Fatalf("expected 0 recyclable (current branch), got %+v", result)
+	if len(result.Recyclable) != 0 {
+		t.Fatalf("expected 0 recyclable (current branch), got %+v", result.Recyclable)
 	}
 }
 
@@ -159,8 +159,8 @@ branch refs/heads/wt-1
 		t.Fatal(err)
 	}
 
-	if len(result) != 0 {
-		t.Fatalf("expected 0 recyclable (missing dir), got %+v", result)
+	if len(result.Recyclable) != 0 {
+		t.Fatalf("expected 0 recyclable (missing dir), got %+v", result.Recyclable)
 	}
 }
 
@@ -192,8 +192,8 @@ branch refs/heads/wt-2
 		t.Fatal(err)
 	}
 
-	if len(result) != 2 {
-		t.Fatalf("expected 2 recyclable (union), got %d: %+v", len(result), result)
+	if len(result.Recyclable) != 2 {
+		t.Fatalf("expected 2 recyclable (union), got %d: %+v", len(result.Recyclable), result.Recyclable)
 	}
 }
 

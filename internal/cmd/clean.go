@@ -43,23 +43,23 @@ func runClean(cmd *cobra.Command, args []string) error {
 		Logf:    logf,
 	}
 
-	recyclable, err := cycle.FindRecyclable(d)
+	result, err := cycle.FindRecyclable(d)
 	if err != nil {
 		return err
 	}
 
-	if len(recyclable) == 0 {
+	if len(result.Recyclable) == 0 {
 		logf("✨ No worktrees to clean")
 		return nil
 	}
 
 	var branches []string
-	for _, r := range recyclable {
+	for _, r := range result.Recyclable {
 		branches = append(branches, r.Branch)
 	}
 	logf("🧹 Cleaning: %v", branches)
 
-	for _, r := range recyclable {
+	for _, r := range result.Recyclable {
 		if err := runWt("remove", "-y", r.Branch); err != nil {
 			logf("warning: failed to remove worktree %s: %v", r.Branch, err)
 			continue
