@@ -3,13 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"text/tabwriter"
 
-	"github.com/sestinj/wt-cycle/internal/cache"
 	"github.com/sestinj/wt-cycle/internal/cycle"
 	gitpkg "github.com/sestinj/wt-cycle/internal/git"
-	ghpkg "github.com/sestinj/wt-cycle/internal/github"
 	"github.com/spf13/cobra"
 )
 
@@ -40,28 +37,20 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not in a git repository: %w", err)
 	}
 
-	logf := func(format string, args ...interface{}) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
-	}
+	e := newEnv(gitClient, repoRoot)
+	return e.doList()
+}
 
-	d := &cycle.Deps{
-		Git:     gitClient,
-		GitHub:  ghpkg.NewGHClient(),
-		Cache:   cache.New(repoRoot),
-		NoCache: noCache,
-		Verbose: verbose,
-		Logf:    logf,
-	}
-
+func (e *env) doList() error {
 	// Get all worktrees
-	wtOutput, err := gitClient.WorktreeListPorcelain()
+	wtOutput, err := e.deps.Git.WorktreeListPorcelain()
 	if err != nil {
 		return fmt.Errorf("listing worktrees: %w", err)
 	}
 	allWts := gitpkg.ParseWorktreeList(wtOutput)
 
 	// FindRecyclable does all the expensive work (including parallel IsClean)
-	result, err := cycle.FindRecyclable(d)
+	result, err := cycle.FindRecyclable(e.deps)
 	if err != nil {
 		return err
 	}
@@ -76,7 +65,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		skippedReason[s.Branch] = s.Reason
 	}
 
-	currentBranch, _ := gitClient.CurrentBranch()
+	currentBranch, _ := e.deps.Git.CurrentBranch()
 
 	// Build status list for wt-N worktrees
 	var statuses []wtStatus
@@ -98,18 +87,18 @@ func runList(cmd *cobra.Command, args []string) error {
 		statuses = append(statuses, s)
 	}
 
-	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
+	if e.jsonOut {
+		enc := json.NewEncoder(e.stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(statuses)
 	}
 
 	if len(statuses) == 0 {
-		fmt.Println("No wt-N worktrees found.")
+		fmt.Fprintln(e.stdout, "No wt-N worktrees found.")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := tabwriter.NewWriter(e.stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "BRANCH\tPATH\tSTATUS\tREASON")
 	for _, s := range statuses {
 		status := "active"
