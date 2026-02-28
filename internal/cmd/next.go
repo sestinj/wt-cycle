@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sestinj/wt-cycle/internal/config"
 	"github.com/sestinj/wt-cycle/internal/cycle"
 	gitpkg "github.com/sestinj/wt-cycle/internal/git"
 	"github.com/sestinj/wt-cycle/internal/lock"
@@ -28,6 +29,12 @@ func runNext(cmd *cobra.Command, args []string) error {
 	repoRoot, err := gitClient.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not in a git repository: %w", err)
+	}
+
+	// If this repo is in the skip list, just print the repo root and exit
+	if cfg := config.Load(); cfg.ShouldSkip(repoRoot) {
+		fmt.Println(repoRoot)
+		return nil
 	}
 
 	// Acquire lock
