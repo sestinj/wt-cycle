@@ -65,6 +65,7 @@ type Expense struct {
 	BillingAmount    *Money    `json:"billing_amount"`
 	PurchasedAmount  *Money    `json:"purchased_amount"`
 	Merchant         *Merchant `json:"merchant"`
+	UserID           string    `json:"user_id"`
 	User             *User     `json:"user"`
 }
 

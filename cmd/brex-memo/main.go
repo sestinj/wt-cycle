@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -35,7 +36,7 @@ Include scopes that allow reading expenses and updating card expenses.
 Example:
   export BREX_TOKEN=bxt_...
   brex-memo verify
-  brex-memo export --output memos.csv
+  brex-memo export --user-id cuuser_... --output memos.csv
   # edit the memo column, then:
   brex-memo apply --csv memos.csv --dry-run
   brex-memo apply --csv memos.csv`),
@@ -110,6 +111,9 @@ func verifyCmd(token, baseURL *string) *cobra.Command {
 func listCmd(token, baseURL *string) *cobra.Command {
 	var jsonOut, cardOnly bool
 	var maxPages int
+	var userIDs []string
+	var userEmail, userName string
+	var filterMe bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "Print expenses with an empty memo",
@@ -119,9 +123,14 @@ func listCmd(token, baseURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			uid, err := resolveExpenseUserIDs(ctx, c, userIDs, userEmail, userName, filterMe)
+			if err != nil {
+				return err
+			}
 			params := brex.ListExpensesParams{
-				Limit:  100,
-				Expand: []string{"merchant", "user"},
+				Limit:   100,
+				Expand:  []string{"merchant", "user"},
+				UserIDs: uid,
 			}
 			if cardOnly {
 				params.ExpenseType = []string{"CARD"}
@@ -147,6 +156,10 @@ func listCmd(token, baseURL *string) *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON array output")
 	cmd.Flags().BoolVar(&cardOnly, "card-only", true, "only CARD expenses (required for card memo updates)")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 0, "max list pages (100 expenses each; 0 = all)")
+	cmd.Flags().StringSliceVar(&userIDs, "user-id", nil, "only expenses for Brex user id(s); repeat or comma-separated (dashboard filter decodes to cuuser_…)")
+	cmd.Flags().StringVar(&userEmail, "user-email", "", "resolve user id from email (needs users.readonly scope)")
+	cmd.Flags().StringVar(&userName, "user-name", "", "resolve user id from full name e.g. 'Nate Sesti' (needs users.readonly; lists users)")
+	cmd.Flags().BoolVar(&filterMe, "me", false, "only expenses for the authenticated user")
 	return cmd
 }
 
@@ -154,6 +167,9 @@ func exportCmd(token, baseURL *string) *cobra.Command {
 	var outPath string
 	var cardOnly bool
 	var maxPages int
+	var userIDs []string
+	var userEmail, userName string
+	var filterMe bool
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Write a CSV of expenses missing memos (edit memo then apply)",
@@ -163,9 +179,14 @@ func exportCmd(token, baseURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			uid, err := resolveExpenseUserIDs(ctx, c, userIDs, userEmail, userName, filterMe)
+			if err != nil {
+				return err
+			}
 			params := brex.ListExpensesParams{
-				Limit:  100,
-				Expand: []string{"merchant", "user"},
+				Limit:   100,
+				Expand:  []string{"merchant", "user"},
+				UserIDs: uid,
 			}
 			if cardOnly {
 				params.ExpenseType = []string{"CARD"}
@@ -182,8 +203,8 @@ func exportCmd(token, baseURL *string) *cobra.Command {
 			defer f.Close()
 			w := csv.NewWriter(f)
 			header := []string{
-				"expense_id", "purchased_at", "amount_minor", "currency", "merchant_descriptor",
-				"category", "dashboard_url", "suggested_memo", "memo",
+				"expense_id", "brex_user_id", "user_display_name", "purchased_at", "amount_minor", "currency",
+				"merchant_descriptor", "category", "dashboard_url", "suggested_memo", "memo",
 			}
 			if err := w.Write(header); err != nil {
 				return err
@@ -191,9 +212,15 @@ func exportCmd(token, baseURL *string) *cobra.Command {
 			for _, e := range missing {
 				amt, cur := moneyFields(e)
 				merchant := merchantDescriptor(e)
-				suggested := defaultSuggestedMemo(e)
+				suggested := draftMemoScaffold(e)
+				brexUID := e.UserID
+				if brexUID == "" && e.User != nil {
+					brexUID = e.User.ID
+				}
 				row := []string{
 					e.ID,
+					brexUID,
+					userDisplayName(e),
 					e.PurchasedAt,
 					strconv.FormatInt(amt, 10),
 					cur,
@@ -218,6 +245,10 @@ func exportCmd(token, baseURL *string) *cobra.Command {
 	cmd.Flags().StringVarP(&outPath, "output", "o", "brex-memos.csv", "output CSV path")
 	cmd.Flags().BoolVar(&cardOnly, "card-only", true, "only CARD expenses")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 0, "max list pages (0 = all)")
+	cmd.Flags().StringSliceVar(&userIDs, "user-id", nil, "only expenses for Brex user id(s); repeat or comma-separated")
+	cmd.Flags().StringVar(&userEmail, "user-email", "", "resolve user id from email (needs users.readonly)")
+	cmd.Flags().StringVar(&userName, "user-name", "", "resolve user id from full name (needs users.readonly)")
+	cmd.Flags().BoolVar(&filterMe, "me", false, "only expenses for the authenticated user")
 	return cmd
 }
 
@@ -323,6 +354,88 @@ func applyCmd(token, baseURL *string) *cobra.Command {
 	return cmd
 }
 
+// resolveExpenseUserIDs builds user_id[] query values for list expenses.
+// Pass explicit ids from the dashboard (e.g. cuuser_…) or resolve via Team API.
+func resolveExpenseUserIDs(ctx context.Context, c *brex.Client, userIDs []string, userEmail, userName string, useMe bool) ([]string, error) {
+	n := 0
+	if len(userIDs) > 0 {
+		n++
+	}
+	if strings.TrimSpace(userEmail) != "" {
+		n++
+	}
+	if strings.TrimSpace(userName) != "" {
+		n++
+	}
+	if useMe {
+		n++
+	}
+	if n > 1 {
+		return nil, errors.New("use only one of --user-id, --user-email, --user-name, or --me")
+	}
+
+	switch {
+	case useMe:
+		u, err := c.GetMe(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get current user (needs users.readonly on token): %w", err)
+		}
+		return []string{u.ID}, nil
+	case strings.TrimSpace(userEmail) != "":
+		items, _, err := c.ListUsers(ctx, brex.ListUsersParams{
+			Limit: 10,
+			Email: strings.TrimSpace(userEmail),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list users by email (needs users.readonly): %w", err)
+		}
+		if len(items) != 1 {
+			return nil, fmt.Errorf("expected 1 user for email %q, got %d", strings.TrimSpace(userEmail), len(items))
+		}
+		return []string{items[0].ID}, nil
+	case strings.TrimSpace(userName) != "":
+		allUsers, err := c.ListAllUsers(ctx, 1000, 0)
+		if err != nil {
+			return nil, fmt.Errorf("list users (needs users.readonly): %w", err)
+		}
+		id, err := brex.FindUserIDByDisplayName(allUsers, userName)
+		if err != nil {
+			return nil, err
+		}
+		return []string{id}, nil
+	case len(userIDs) > 0:
+		out := flattenCommaIDs(userIDs)
+		for i := range out {
+			out[i] = strings.TrimSpace(out[i])
+		}
+		var nonEmpty []string
+		for _, id := range out {
+			if id != "" {
+				nonEmpty = append(nonEmpty, id)
+			}
+		}
+		if len(nonEmpty) == 0 {
+			return nil, errors.New("no user ids passed to --user-id")
+		}
+		return nonEmpty, nil
+	default:
+		return nil, nil
+	}
+}
+
+func flattenCommaIDs(ids []string) []string {
+	var out []string
+	for _, part := range ids {
+		for _, s := range strings.Split(part, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 func filterMissingMemo(all []brex.Expense, cardOnly bool) []brex.Expense {
 	var out []brex.Expense
 	for _, e := range all {
@@ -357,15 +470,30 @@ func merchantDescriptor(e brex.Expense) string {
 	return ""
 }
 
-func defaultSuggestedMemo(e brex.Expense) string {
-	m := merchantDescriptor(e)
-	if m != "" {
-		return fmt.Sprintf("Business expense — %s", m)
+func userDisplayName(e brex.Expense) string {
+	if e.User != nil {
+		return strings.TrimSpace(e.User.FirstName + " " + e.User.LastName)
 	}
-	if e.Category != "" {
-		return fmt.Sprintf("Business expense — %s", strings.ReplaceAll(e.Category, "_", " "))
+	return ""
+}
+
+// draftMemoScaffold is a concrete starting sentence for the memo column (fill bracketed parts).
+func draftMemoScaffold(e brex.Expense) string {
+	who := userDisplayName(e)
+	if who == "" {
+		who = "I"
 	}
-	return "Business expense"
+	vendor := merchantDescriptor(e)
+	if vendor == "" {
+		vendor = "this vendor"
+	}
+	cat := strings.ReplaceAll(e.Category, "_", " ")
+	if cat == "" {
+		cat = "card"
+	}
+	cat = strings.ToLower(cat)
+	return fmt.Sprintf("%s — %s (%s): payment for [product/plan]; for [business purpose].",
+		who, vendor, cat)
 }
 
 func formatExpenseLine(e brex.Expense) string {
