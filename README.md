@@ -12,11 +12,11 @@
 
 ---
 
-## Why?
+## Why? 🤔
 
 When working with multiple Claude Code sessions in parallel, each session needs its own worktree. `wt-cycle` automates the lifecycle of numbered `wt-N` worktrees -- creating new ones when needed, recycling merged ones to avoid clutter, and cleaning up stale ones in bulk.
 
-## Install
+## Install 🚀
 
 **From release (recommended):**
 
@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/sestinj/wt-cycle/main/install.sh | 
 make install  # builds and copies to ~/.local/bin/
 ```
 
-## Usage
+## Usage ⚡
 
 ```bash
 # Create or recycle a worktree (prints path to stdout)
@@ -43,13 +43,13 @@ wt-cycle list
 wt-cycle clean
 ```
 
-### Flags
+### Flags 🏳️
 
 - `--verbose` / `-v` -- verbose output to stderr
 - `--no-cache` -- bypass the GitHub API cache (5 min TTL)
 - `--json` -- JSON output (for `list`)
 
-## Shell Integration
+## Shell Integration 🐚
 
 The `cc` fish function wraps `wt-cycle next`:
 
@@ -61,7 +61,7 @@ function cc
 end
 ```
 
-## How It Works
+## How It Works 🔄
 
 A worktree is **recyclable** if:
 1. Its branch matches `wt-N`
@@ -71,11 +71,11 @@ A worktree is **recyclable** if:
 
 `wt-cycle next` either recycles the first available worktree or creates a new one, delegating to [worktrunk](https://github.com/sestinj/worktrunk) (`wt switch`) for the actual worktree operations.
 
-## Contributing
+## Contributing 🤝
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and contribution guidelines.
 
-## License
+## License 📄
 
 Apache-2.0 -- see [LICENSE](LICENSE) for details.
 Copyright (c) 2025 Continue Dev, Inc.
